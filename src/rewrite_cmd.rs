@@ -11,9 +11,25 @@ use crate::discover::registry;
 /// [ "$CMD" = "$REWRITTEN" ] && exit 0  # already RTK, skip
 /// ```
 pub fn run(cmd: &str) -> anyhow::Result<()> {
-    let excluded = crate::config::Config::load()
-        .map(|c| c.hooks.exclude_commands)
-        .unwrap_or_default();
+    let config = crate::config::Config::load().unwrap_or_default();
+    let excluded = config.hooks.exclude_commands.clone();
+
+    // Check user-defined aliases first.
+    // An aliased command is rewritten to `rtk <original>` so that run_fallback
+    // can execute the original command and apply the configured filter.
+    let trimmed = cmd.trim();
+    if !trimmed.starts_with("rtk ") {
+        let aliases = &config.aliases.map;
+        let alias_match = aliases.keys().filter(|prefix| {
+            let p = prefix.as_str();
+            trimmed == p || trimmed.starts_with(&format!("{} ", p))
+        }).max_by_key(|p| p.len());
+
+        if alias_match.is_some() {
+            print!("rtk {}", trimmed);
+            return Ok(());
+        }
+    }
 
     match registry::rewrite_command(cmd, &excluded) {
         Some(rewritten) => {

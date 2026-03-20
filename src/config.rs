@@ -18,6 +18,8 @@ pub struct Config {
     pub hooks: HooksConfig,
     #[serde(default)]
     pub limits: LimitsConfig,
+    #[serde(default)]
+    pub aliases: AliasesConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -26,6 +28,29 @@ pub struct HooksConfig {
     /// Survives `rtk init -g` re-runs since config.toml is user-owned.
     #[serde(default)]
     pub exclude_commands: Vec<String>,
+}
+
+/// Command aliases: map a command prefix to an existing RTK filter name.
+///
+/// When RTK sees a command matching an alias prefix, it runs the original
+/// command unchanged (preserving virtualenvs, make targets, etc.) but filters
+/// the output using the named RTK filter.
+///
+/// Valid filter names: "pytest", "mypy", "ruff check", "ruff format",
+///                     "cargo test", "cargo build", "cargo clippy"
+///
+/// Example in ~/.config/rtk/config.toml:
+/// ```toml
+/// [aliases]
+/// "uv run pytest" = "pytest"
+/// "uv run mypy"   = "mypy"
+/// "make test"     = "pytest"
+/// "make lint"     = "mypy"
+/// ```
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct AliasesConfig {
+    #[serde(flatten)]
+    pub map: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

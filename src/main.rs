@@ -1083,8 +1083,8 @@ fn run_fallback(parse_error: clap::Error) -> Result<()> {
     // Start timer before execution to capture actual command runtime
     let timer = tracking::TimedExecution::start();
 
-    // TOML filter lookup — bypass with RTK_NO_TOML=1
-    // Use basename of args[0] so absolute paths (/usr/bin/make) still match "^make\b".
+    // Config alias lookup — runs original command, applies named RTK filter to output.
+    // Use basename of args[0] for the lookup so absolute paths still match.
     let lookup_cmd = {
         let base = std::path::Path::new(&args[0])
             .file_name()
@@ -1095,6 +1095,67 @@ fn run_fallback(parse_error: clap::Error) -> Result<()> {
             .collect::<Vec<_>>()
             .join(" ")
     };
+    // Check user-defined aliases (config.toml [aliases]) before TOML filters.
+    // Aliases execute the ORIGINAL command (preserving venv/make targets) but
+    // filter output through the named RTK filter function.
+    let alias_filter_name = {
+        let aliases = config::Config::load()
+            .map(|c| c.aliases.map)
+            .unwrap_or_default();
+        find_alias_match(&lookup_cmd, &aliases)
+    };
+
+    if let Some(ref filter_name) = alias_filter_name {
+        let result = utils::resolved_command(&args[0])
+            .args(&args[1..])
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .output();
+
+        match result {
+            Ok(output) => {
+                let stdout_raw = String::from_utf8_lossy(&output.stdout);
+
+                let tee_hint = if !output.status.success() {
+                    tee::tee_and_hint(
+                        &stdout_raw,
+                        &raw_command,
+                        output.status.code().unwrap_or(1),
+                    )
+                } else {
+                    None
+                };
+
+                let filtered = apply_named_filter(filter_name, &stdout_raw)
+                    .unwrap_or_else(|| stdout_raw.to_string());
+
+                println!("{}", filtered);
+                if let Some(hint) = tee_hint {
+                    println!("{}", hint);
+                }
+
+                timer.track(
+                    &raw_command,
+                    &format!("rtk:alias({}) {}", filter_name, raw_command),
+                    &stdout_raw,
+                    &filtered,
+                );
+                tracking::record_parse_failure_silent(&raw_command, &error_message, true);
+
+                if !output.status.success() {
+                    std::process::exit(output.status.code().unwrap_or(1));
+                }
+            }
+            Err(e) => {
+                tracking::record_parse_failure_silent(&raw_command, &error_message, false);
+                eprintln!("[rtk: {}]", e);
+                std::process::exit(127);
+            }
+        }
+        return Ok(());
+    }
+
     let toml_match = if std::env::var("RTK_NO_TOML").ok().as_deref() == Some("1") {
         None
     } else {
@@ -2196,6 +2257,36 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Find the longest alias prefix that matches `cmd`.
+/// Returns the target filter name (e.g. "pytest") or None.
+fn find_alias_match(cmd: &str, aliases: &std::collections::HashMap<String, String>) -> Option<String> {
+    let mut best: Option<(usize, String)> = None;
+    for (prefix, target) in aliases {
+        let matches = cmd == prefix.as_str()
+            || cmd.starts_with(&format!("{} ", prefix));
+        if matches {
+            let len = prefix.len();
+            if best.as_ref().map_or(true, |(bl, _)| len > *bl) {
+                best = Some((len, target.clone()));
+            }
+        }
+    }
+    best.map(|(_, t)| t)
+}
+
+/// Apply a named RTK filter function to captured stdout.
+/// Returns None if the filter name is unknown (caller falls back to raw output).
+fn apply_named_filter(name: &str, stdout: &str) -> Option<String> {
+    match name {
+        "pytest" => Some(pytest_cmd::filter_pytest_output(stdout)),
+        "mypy" => Some(mypy_cmd::filter_mypy_output(stdout)),
+        "ruff check" | "ruff" => Some(ruff_cmd::filter_ruff_check_json(stdout)),
+        "ruff format" => Some(ruff_cmd::filter_ruff_format(stdout)),
+        "cargo test" => Some(cargo_cmd::filter_cargo_test(stdout)),
+        _ => None,
+    }
 }
 
 /// Returns true for commands that are invoked via the hook pipeline
