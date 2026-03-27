@@ -39,6 +39,7 @@ mod mypy_cmd;
 mod next_cmd;
 mod npm_cmd;
 mod parser;
+mod permissions;
 mod pip_cmd;
 mod playwright_cmd;
 mod pnpm_cmd;
@@ -46,8 +47,11 @@ mod prettier_cmd;
 mod prisma_cmd;
 mod psql_cmd;
 mod pytest_cmd;
+mod rake_cmd;
 mod read;
 mod rewrite_cmd;
+mod rspec_cmd;
+mod rubocop_cmd;
 mod ruff_cmd;
 mod runner;
 mod session_cmd;
@@ -128,8 +132,8 @@ enum Commands {
     Read {
         /// File to read
         file: PathBuf,
-        /// Filter: none, minimal, aggressive
-        #[arg(short, long, default_value = "minimal")]
+        /// Filter: none (default, full content), minimal, aggressive
+        #[arg(short, long, default_value = "none")]
         level: filter::FilterLevel,
         /// Max lines
         #[arg(short, long, conflicts_with = "tail_lines")]
@@ -237,13 +241,16 @@ enum Commands {
         command: Vec<String>,
     },
 
-    /// Show JSON structure without values
+    /// Show JSON (compact values, or schema-only with --schema)
     Json {
         /// JSON file
         file: PathBuf,
         /// Max depth
         #[arg(short, long, default_value = "5")]
         depth: usize,
+        /// Show structure only (strip all values)
+        #[arg(long)]
+        schema: bool,
     },
 
     /// Summarize project dependencies
@@ -381,15 +388,19 @@ enum Commands {
         /// Target Codex CLI (uses AGENTS.md + RTK.md, no Claude hook patching)
         #[arg(long)]
         codex: bool,
+
+        /// Install GitHub Copilot integration (VS Code + CLI)
+        #[arg(long)]
+        copilot: bool,
     },
 
     /// Download with compact output (strips progress bars)
     Wget {
         /// URL to download
         url: String,
-        /// Output to stdout instead of file
-        #[arg(short = 'O', long)]
-        stdout: bool,
+        /// Output file (-O - for stdout)
+        #[arg(short = 'O', long = "output-document", allow_hyphen_values = true)]
+        output: Option<String>,
         /// Additional wget arguments
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -637,6 +648,27 @@ enum Commands {
     /// Mypy type checker with grouped error output
     Mypy {
         /// Mypy arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// Rake/Rails test with compact Minitest output (Ruby)
+    Rake {
+        /// Rake arguments (e.g., test, test TEST=path/to/test.rb)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// RuboCop linter with compact output (Ruby)
+    Rubocop {
+        /// RuboCop arguments (e.g., --auto-correct, -A)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// RSpec test runner with compact output (Rails/Ruby)
+    Rspec {
+        /// RSpec arguments (e.g., spec/models, --tag focus)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -1562,11 +1594,15 @@ fn main() -> Result<()> {
             runner::run_test(&cmd, cli.verbose)?;
         }
 
-        Commands::Json { file, depth } => {
+        Commands::Json {
+            file,
+            depth,
+            schema,
+        } => {
             if file == Path::new("-") {
-                json_cmd::run_stdin(depth, cli.verbose)?;
+                json_cmd::run_stdin(depth, schema, cli.verbose)?;
             } else {
-                json_cmd::run(&file, depth, cli.verbose)?;
+                json_cmd::run(&file, depth, schema, cli.verbose)?;
             }
         }
 
@@ -1718,6 +1754,7 @@ fn main() -> Result<()> {
             no_patch,
             uninstall,
             codex,
+            copilot,
         } => {
             if show {
                 init::show_config(codex)?;
@@ -1733,6 +1770,8 @@ fn main() -> Result<()> {
                     init::PatchMode::Ask
                 };
                 init::run_gemini(global, hook_only, patch_mode, cli.verbose)?;
+            } else if copilot {
+                init::run_copilot(cli.verbose)?;
             } else {
                 let install_opencode = opencode;
                 let install_claude = !opencode;
@@ -1763,11 +1802,18 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Wget { url, stdout, args } => {
-            if stdout {
+        Commands::Wget { url, output, args } => {
+            if output.as_deref() == Some("-") {
                 wget_cmd::run_stdout(&url, &args, cli.verbose)?;
             } else {
-                wget_cmd::run(&url, &args, cli.verbose)?;
+                // Pass -O <file> through to wget via args
+                let mut all_args = Vec::new();
+                if let Some(out_file) = &output {
+                    all_args.push("-O".to_string());
+                    all_args.push(out_file.clone());
+                }
+                all_args.extend(args);
+                wget_cmd::run(&url, &all_args, cli.verbose)?;
             }
         }
 
@@ -2045,6 +2091,18 @@ fn main() -> Result<()> {
 
         Commands::Mypy { args } => {
             mypy_cmd::run(&args, cli.verbose)?;
+        }
+
+        Commands::Rake { args } => {
+            rake_cmd::run(&args, cli.verbose)?;
+        }
+
+        Commands::Rubocop { args } => {
+            rubocop_cmd::run(&args, cli.verbose)?;
+        }
+
+        Commands::Rspec { args } => {
+            rspec_cmd::run(&args, cli.verbose)?;
         }
 
         Commands::Pip { args } => {
@@ -2336,6 +2394,9 @@ fn is_operational_command(cmd: &Commands) -> bool {
             | Commands::Curl { .. }
             | Commands::Ruff { .. }
             | Commands::Pytest { .. }
+            | Commands::Rake { .. }
+            | Commands::Rubocop { .. }
+            | Commands::Rspec { .. }
             | Commands::Pip { .. }
             | Commands::Go { .. }
             | Commands::GolangciLint { .. }

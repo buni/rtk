@@ -44,6 +44,11 @@ pub const PATTERNS: &[&str] = &[
     // Go tooling
     r"^go\s+(test|build|vet)",
     r"^golangci-lint(\s|$)",
+    // Ruby tooling
+    r"^bundle\s+(install|update)\b",
+    r"^(?:bundle\s+exec\s+)?(?:bin/)?(?:rake|rails)\s+test",
+    r"^(?:bundle\s+exec\s+)?rspec(?:\s|$)",
+    r"^(?:bundle\s+exec\s+)?rubocop(?:\s|$)",
     // AWS CLI
     r"^aws\s+",
     // PostgreSQL
@@ -74,7 +79,7 @@ pub const PATTERNS: &[&str] = &[
     r"^shellcheck\b",
     r"^shopify\s+theme\s+(push|pull)",
     r"^sops\b",
-    r"^swift\s+build\b",
+    r"^swift\s+(build|test)\b",
     r"^systemctl\s+status\b",
     r"^terraform\s+plan",
     r"^tofu\s+(fmt|init|plan|validate)(\s|$)",
@@ -332,6 +337,45 @@ pub const RULES: &[RtkRule] = &[
         subcmd_savings: &[],
         subcmd_status: &[],
     },
+    // Ruby tooling
+    RtkRule {
+        rtk_cmd: "rtk bundle",
+        rewrite_prefixes: &["bundle"],
+        category: "Ruby",
+        savings_pct: 70.0,
+        subcmd_savings: &[],
+        subcmd_status: &[],
+    },
+    RtkRule {
+        rtk_cmd: "rtk rake",
+        rewrite_prefixes: &[
+            "bundle exec rails",
+            "bundle exec rake",
+            "bin/rails",
+            "rails",
+            "rake",
+        ],
+        category: "Ruby",
+        savings_pct: 85.0,
+        subcmd_savings: &[("test", 90.0)],
+        subcmd_status: &[],
+    },
+    RtkRule {
+        rtk_cmd: "rtk rspec",
+        rewrite_prefixes: &["bundle exec rspec", "bin/rspec", "rspec"],
+        category: "Tests",
+        savings_pct: 65.0,
+        subcmd_savings: &[],
+        subcmd_status: &[],
+    },
+    RtkRule {
+        rtk_cmd: "rtk rubocop",
+        rewrite_prefixes: &["bundle exec rubocop", "rubocop"],
+        category: "Build",
+        savings_pct: 65.0,
+        subcmd_savings: &[],
+        subcmd_status: &[],
+    },
     // AWS CLI
     RtkRule {
         rtk_cmd: "rtk aws",
@@ -556,7 +600,7 @@ pub const RULES: &[RtkRule] = &[
         rewrite_prefixes: &["swift"],
         category: "Build",
         savings_pct: 65.0,
-        subcmd_savings: &[],
+        subcmd_savings: &[("test", 90.0)],
         subcmd_status: &[],
     },
     RtkRule {
