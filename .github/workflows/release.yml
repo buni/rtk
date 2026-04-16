@@ -92,13 +92,19 @@ jobs:
         working-directory: build
         run: |
           VERSION='${{ needs.resolve-inputs.outputs.version }}'
-          # Replace only the top-level [package] version line (first `version = "..."`).
-          # Portable sed: handle macOS BSD sed requiring '' after -i.
-          if sed --version >/dev/null 2>&1; then
-            sed -i "0,/^version = .*/s//version = \"$VERSION\"/" Cargo.toml
-          else
-            sed -i '' "1,/^version = .*/s//version = \"$VERSION\"/" Cargo.toml
-          fi
+          # Replace only the first bare `version = "..."` line (the [package]
+          # version). Done in Python so behavior is identical across GNU/BSD sed.
+          python3 - "$VERSION" <<'PY'
+          import re, sys
+          version = sys.argv[1]
+          with open("Cargo.toml") as f:
+              text = f.read()
+          new, n = re.subn(r'^version = .*', f'version = "{version}"', text, count=1, flags=re.M)
+          if n != 1:
+              sys.exit("Cargo.toml: no top-level `version = ...` line found")
+          with open("Cargo.toml", "w") as f:
+              f.write(new)
+          PY
           grep '^version = ' Cargo.toml | head -1
 
       - name: Build (native)
