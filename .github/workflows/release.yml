@@ -140,11 +140,10 @@ jobs:
           VERSION='${{ needs.resolve-inputs.outputs.version }}'
           NAME="rtk-${VERSION}-${{ matrix.target }}"
           mkdir -p "../dist"
-          cp target/${{ matrix.target }}/release/rtk "$NAME"
-          tar czf "../dist/${NAME}.tar.gz" "$NAME"
-          rm "$NAME"
+          cp target/${{ matrix.target }}/release/rtk "../dist/${NAME}"
+          chmod +x "../dist/${NAME}"
           cd ../dist
-          shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256"
+          shasum -a 256 "${NAME}" > "${NAME}.sha256"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -152,13 +151,11 @@ jobs:
         working-directory: build
         run: |
           VERSION='${{ needs.resolve-inputs.outputs.version }}'
-          NAME="rtk-${VERSION}-${{ matrix.target }}"
+          NAME="rtk-${VERSION}-${{ matrix.target }}.exe"
           mkdir -p "../dist"
-          cp target/${{ matrix.target }}/release/rtk.exe "${NAME}.exe"
-          7z a "../dist/${NAME}.zip" "${NAME}.exe"
-          rm "${NAME}.exe"
+          cp target/${{ matrix.target }}/release/rtk.exe "../dist/${NAME}"
           cd ../dist
-          sha256sum "${NAME}.zip" > "${NAME}.zip.sha256"
+          sha256sum "${NAME}" > "${NAME}.sha256"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
