@@ -7,8 +7,9 @@ This is a fork of [rtk-ai/rtk](https://github.com/rtk-ai/rtk). It carries additi
 - `UPSTREAM_REPO` — upstream repo URL (default `https://github.com/rtk-ai/rtk.git`; set to any fork URL to rebase on a different upstream)
 - `UPSTREAM_REF` — upstream tag this fork targets (e.g. `v0.31.0`)
 - `VERSION` — fork version string (e.g. `0.31.0-alias.1`)
-- `patches/` — fork-specific `.patch` files, applied in lexical order
-- `PATCH.md` — agent-friendly description of the fork feature; used to re-implement if the patch fails to rebase
+- `patches/` — fork-specific changes. Each feature contributes two files with the same basename:
+  - `NNNN-<desc>.patch` — the `git am` payload (applied at build time)
+  - `NNNN-<desc>.md` — agent-friendly re-implementation guide (read when the patch fails to rebase on a future upstream)
 - `scripts/apply-patches.sh` — clones upstream, applies patches
 - `.github/workflows/ci.yml` — CI: patch-apply check + tests
 - `.github/workflows/release.yml` — workflow_dispatch: publishes GitHub Release binaries

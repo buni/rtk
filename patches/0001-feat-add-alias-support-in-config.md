@@ -1,6 +1,6 @@
 # Fork Patch: Alias Support in Config
 
-Agent-friendly description of the fork-specific feature carried by `patches/0001-feat-add-alias-support-in-config.patch`. If upstream drift makes the patch impossible to rebase, use this document to re-implement the feature against the new upstream.
+Agent-friendly description of the fork-specific feature carried by the sibling `.patch` file. If upstream drift makes the patch impossible to rebase, use this document to re-implement the feature against the new upstream.
 
 ## Feature Summary
 
