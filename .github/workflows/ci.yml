@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [fork]
+  pull_request:
+    branches: [fork]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  patch-check:
+    name: Patches apply cleanly
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+
+      - name: Apply patches against pinned upstream
+        run: |
+          scripts/apply-patches.sh build
+
+      - name: Show resulting HEAD
+        run: |
+          cd build && git log --oneline -5
+
+  test:
+    name: Test on ${{ matrix.os }}
+    needs: patch-check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry + git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('UPSTREAM_REF', 'patches/**') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Apply patches
+        run: scripts/apply-patches.sh build
+
+      - name: Cache build target
+        uses: actions/cache@v4
+        with:
+          path: build/target
+          key: ${{ runner.os }}-target-${{ hashFiles('UPSTREAM_REF', 'patches/**') }}
+          restore-keys: |
+            ${{ runner.os }}-target-
+
+      - name: cargo fmt --check
+        working-directory: build
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        working-directory: build
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        working-directory: build
+        run: cargo test --all

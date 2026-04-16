@@ -1,0 +1,238 @@
+From 89888b7707660432b34657f3f9d54dbe258f885e Mon Sep 17 00:00:00 2001
+From: Hristo <xkyrchokov@gmail.com>
+Date: Fri, 20 Mar 2026 12:23:40 +0000
+Subject: [PATCH] feat: add alias support in config
+
+---
+ src/cargo_cmd.rs   |  2 +-
+ src/config.rs      | 25 ++++++++++++
+ src/main.rs        | 95 +++++++++++++++++++++++++++++++++++++++++++++-
+ src/pytest_cmd.rs  |  2 +-
+ src/rewrite_cmd.rs | 22 +++++++++--
+ 5 files changed, 139 insertions(+), 7 deletions(-)
+
+diff --git a/src/cargo_cmd.rs b/src/cargo_cmd.rs
+index 63eea4b..fbdf656 100644
+--- a/src/cargo_cmd.rs
++++ b/src/cargo_cmd.rs
+@@ -746,7 +746,7 @@ impl AggregatedTestResult {
+ }
+ 
+ /// Filter cargo test output - show failures + summary only
+-fn filter_cargo_test(output: &str) -> String {
++pub fn filter_cargo_test(output: &str) -> String {
+     let mut failures: Vec<String> = Vec::new();
+     let mut summary_lines: Vec<String> = Vec::new();
+     let mut in_failure_section = false;
+diff --git a/src/config.rs b/src/config.rs
+index 7ffea86..cdb752e 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -18,6 +18,8 @@ pub struct Config {
+     pub hooks: HooksConfig,
+     #[serde(default)]
+     pub limits: LimitsConfig,
++    #[serde(default)]
++    pub aliases: AliasesConfig,
+ }
+ 
+ #[derive(Debug, Serialize, Deserialize, Default)]
+@@ -28,6 +30,29 @@ pub struct HooksConfig {
+     pub exclude_commands: Vec<String>,
+ }
+ 
++/// Command aliases: map a command prefix to an existing RTK filter name.
++///
++/// When RTK sees a command matching an alias prefix, it runs the original
++/// command unchanged (preserving virtualenvs, make targets, etc.) but filters
++/// the output using the named RTK filter.
++///
++/// Valid filter names: "pytest", "mypy", "ruff check", "ruff format",
++///                     "cargo test", "cargo build", "cargo clippy"
++///
++/// Example in ~/.config/rtk/config.toml:
++/// ```toml
++/// [aliases]
++/// "uv run pytest" = "pytest"
++/// "uv run mypy"   = "mypy"
++/// "make test"     = "pytest"
++/// "make lint"     = "mypy"
++/// ```
++#[derive(Debug, Serialize, Deserialize, Default, Clone)]
++pub struct AliasesConfig {
++    #[serde(flatten)]
++    pub map: std::collections::HashMap<String, String>,
++}
++
+ #[derive(Debug, Serialize, Deserialize)]
+ pub struct TrackingConfig {
+     pub enabled: bool,
+diff --git a/src/main.rs b/src/main.rs
+index 2bbc4bb..d687060 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1083,8 +1083,8 @@ fn run_fallback(parse_error: clap::Error) -> Result<()> {
+     // Start timer before execution to capture actual command runtime
+     let timer = tracking::TimedExecution::start();
+ 
+-    // TOML filter lookup — bypass with RTK_NO_TOML=1
+-    // Use basename of args[0] so absolute paths (/usr/bin/make) still match "^make\b".
++    // Config alias lookup — runs original command, applies named RTK filter to output.
++    // Use basename of args[0] for the lookup so absolute paths still match.
+     let lookup_cmd = {
+         let base = std::path::Path::new(&args[0])
+             .file_name()
+@@ -1095,6 +1095,67 @@ fn run_fallback(parse_error: clap::Error) -> Result<()> {
+             .collect::<Vec<_>>()
+             .join(" ")
+     };
++    // Check user-defined aliases (config.toml [aliases]) before TOML filters.
++    // Aliases execute the ORIGINAL command (preserving venv/make targets) but
++    // filter output through the named RTK filter function.
++    let alias_filter_name = {
++        let aliases = config::Config::load()
++            .map(|c| c.aliases.map)
++            .unwrap_or_default();
++        find_alias_match(&lookup_cmd, &aliases)
++    };
++
++    if let Some(ref filter_name) = alias_filter_name {
++        let result = utils::resolved_command(&args[0])
++            .args(&args[1..])
++            .stdin(std::process::Stdio::inherit())
++            .stdout(std::process::Stdio::piped())
++            .stderr(std::process::Stdio::inherit())
++            .output();
++
++        match result {
++            Ok(output) => {
++                let stdout_raw = String::from_utf8_lossy(&output.stdout);
++
++                let tee_hint = if !output.status.success() {
++                    tee::tee_and_hint(
++                        &stdout_raw,
++                        &raw_command,
++                        output.status.code().unwrap_or(1),
++                    )
++                } else {
++                    None
++                };
++
++                let filtered = apply_named_filter(filter_name, &stdout_raw)
++                    .unwrap_or_else(|| stdout_raw.to_string());
++
++                println!("{}", filtered);
++                if let Some(hint) = tee_hint {
++                    println!("{}", hint);
++                }
++
++                timer.track(
++                    &raw_command,
++                    &format!("rtk:alias({}) {}", filter_name, raw_command),
++                    &stdout_raw,
++                    &filtered,
++                );
++                tracking::record_parse_failure_silent(&raw_command, &error_message, true);
++
++                if !output.status.success() {
++                    std::process::exit(output.status.code().unwrap_or(1));
++                }
++            }
++            Err(e) => {
++                tracking::record_parse_failure_silent(&raw_command, &error_message, false);
++                eprintln!("[rtk: {}]", e);
++                std::process::exit(127);
++            }
++        }
++        return Ok(());
++    }
++
+     let toml_match = if std::env::var("RTK_NO_TOML").ok().as_deref() == Some("1") {
+         None
+     } else {
+@@ -2198,6 +2259,36 @@ fn main() -> Result<()> {
+     Ok(())
+ }
+ 
++/// Find the longest alias prefix that matches `cmd`.
++/// Returns the target filter name (e.g. "pytest") or None.
++fn find_alias_match(cmd: &str, aliases: &std::collections::HashMap<String, String>) -> Option<String> {
++    let mut best: Option<(usize, String)> = None;
++    for (prefix, target) in aliases {
++        let matches = cmd == prefix.as_str()
++            || cmd.starts_with(&format!("{} ", prefix));
++        if matches {
++            let len = prefix.len();
++            if best.as_ref().map_or(true, |(bl, _)| len > *bl) {
++                best = Some((len, target.clone()));
++            }
++        }
++    }
++    best.map(|(_, t)| t)
++}
++
++/// Apply a named RTK filter function to captured stdout.
++/// Returns None if the filter name is unknown (caller falls back to raw output).
++fn apply_named_filter(name: &str, stdout: &str) -> Option<String> {
++    match name {
++        "pytest" => Some(pytest_cmd::filter_pytest_output(stdout)),
++        "mypy" => Some(mypy_cmd::filter_mypy_output(stdout)),
++        "ruff check" | "ruff" => Some(ruff_cmd::filter_ruff_check_json(stdout)),
++        "ruff format" => Some(ruff_cmd::filter_ruff_format(stdout)),
++        "cargo test" => Some(cargo_cmd::filter_cargo_test(stdout)),
++        _ => None,
++    }
++}
++
+ /// Returns true for commands that are invoked via the hook pipeline
+ /// (i.e., commands that process rewritten shell commands).
+ /// Meta commands (init, gain, verify, etc.) are excluded because
+diff --git a/src/pytest_cmd.rs b/src/pytest_cmd.rs
+index 0b1b1f2..a0592f0 100644
+--- a/src/pytest_cmd.rs
++++ b/src/pytest_cmd.rs
+@@ -83,7 +83,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
+ }
+ 
+ /// Parse pytest output using state machine
+-fn filter_pytest_output(output: &str) -> String {
++pub fn filter_pytest_output(output: &str) -> String {
+     let mut state = ParseState::Header;
+     let mut test_files: Vec<String> = Vec::new();
+     let mut failures: Vec<String> = Vec::new();
+diff --git a/src/rewrite_cmd.rs b/src/rewrite_cmd.rs
+index 754f51a..b516054 100644
+--- a/src/rewrite_cmd.rs
++++ b/src/rewrite_cmd.rs
+@@ -11,9 +11,25 @@ use crate::discover::registry;
+ /// [ "$CMD" = "$REWRITTEN" ] && exit 0  # already RTK, skip
+ /// ```
+ pub fn run(cmd: &str) -> anyhow::Result<()> {
+-    let excluded = crate::config::Config::load()
+-        .map(|c| c.hooks.exclude_commands)
+-        .unwrap_or_default();
++    let config = crate::config::Config::load().unwrap_or_default();
++    let excluded = config.hooks.exclude_commands.clone();
++
++    // Check user-defined aliases first.
++    // An aliased command is rewritten to `rtk <original>` so that run_fallback
++    // can execute the original command and apply the configured filter.
++    let trimmed = cmd.trim();
++    if !trimmed.starts_with("rtk ") {
++        let aliases = &config.aliases.map;
++        let alias_match = aliases.keys().filter(|prefix| {
++            let p = prefix.as_str();
++            trimmed == p || trimmed.starts_with(&format!("{} ", p))
++        }).max_by_key(|p| p.len());
++
++        if alias_match.is_some() {
++            print!("rtk {}", trimmed);
++            return Ok(());
++        }
++    }
+ 
+     match registry::rewrite_command(cmd, &excluded) {
+         Some(rewritten) => {
+-- 
+2.43.0
+
