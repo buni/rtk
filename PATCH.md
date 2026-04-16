@@ -46,15 +46,52 @@ Unknown names fall back to printing raw stdout (no filtering, no crash).
 
 ## Re-Implementation Guide (if the patch breaks on future upstream)
 
-### Files touched
+### Files touched (by role, with v0.36.0 paths)
 
-1. **`src/config.rs`** — add the `AliasesConfig` type and hook it into the main `Config` struct.
-2. **`src/main.rs`** — in the `run_fallback` parse-error path, check aliases before TOML filters; add `find_alias_match` and `apply_named_filter` helpers.
-3. **`src/rewrite_cmd.rs`** — in the hook command rewrite function, check aliases before the normal registry lookup and rewrite aliased commands to `rtk <original>`.
-4. **`src/cargo_cmd.rs`** — change `filter_cargo_test` from `fn` to `pub fn` so it can be called from `apply_named_filter`.
-5. **`src/pytest_cmd.rs`** — change `filter_pytest_output` from `fn` to `pub fn` for the same reason.
+Since upstream keeps reorganizing (v0.31.0 used a flat `src/`, v0.34.2+ moved to the modular layout below), describe each edit by role and find the current file via `grep` if paths have moved again.
 
-Visibility changes on `mypy_cmd::filter_mypy_output`, `ruff_cmd::filter_ruff_check_json`, `ruff_cmd::filter_ruff_format` may also be needed depending on upstream's current access modifiers.
+| Role | v0.31.0 path | v0.34.2+ path |
+|------|--------------|---------------|
+| `Config` struct | `src/config.rs` | `src/core/config.rs` |
+| `run_fallback` | `src/main.rs` | `src/main.rs` |
+| Hook rewrite entry | `src/rewrite_cmd.rs` | `src/hooks/rewrite_cmd.rs` |
+| `filter_cargo_test` | `src/cargo_cmd.rs` | `src/cmds/rust/cargo_cmd.rs` |
+| `filter_pytest_output` | `src/pytest_cmd.rs` | `src/cmds/python/pytest_cmd.rs` |
+| `filter_mypy_output` | `src/mypy_cmd.rs` | `src/cmds/python/mypy_cmd.rs` |
+| `filter_ruff_*` | `src/ruff_cmd.rs` | `src/cmds/python/ruff_cmd.rs` |
+
+Quick find:
+```bash
+grep -rln "pub struct Config " src/
+grep -rln "fn run_fallback" src/
+grep -rln "fn filter_pytest_output\|fn filter_cargo_test" src/
+```
+
+### Edits per file
+
+1. **Config module (`Config` struct)** — add the `AliasesConfig` type and a field on `Config`.
+2. **`src/main.rs::run_fallback`** — inject alias check before TOML filter lookup; add `find_alias_match` and `apply_named_filter` helpers near other free functions.
+3. **Hook rewrite (`rewrite_cmd.rs::run`)** — load full `Config` (instead of just `hooks.exclude_commands`), check aliases, feed the result into the existing permission-verdict match.
+4. **`cargo_cmd.rs`** — change `filter_cargo_test` from `fn` to `pub fn`.
+5. **`pytest_cmd.rs`** — change `filter_pytest_output` from `fn` to `pub fn`.
+
+Already-public filters in v0.36.0 (no visibility edit needed): `mypy_cmd::filter_mypy_output`, `ruff_cmd::filter_ruff_check_json`, `ruff_cmd::filter_ruff_format`.
+
+### Module import paths (v0.36.0)
+
+Use these when porting; if upstream reorganizes again, `grep` for the names.
+
+- `crate::core::config::Config`
+- `crate::core::utils::resolved_command`
+- `crate::core::utils::exit_code_from_output`
+- `crate::core::tee::tee_and_hint`
+- `crate::core::tracking::record_parse_failure_silent`
+- `crate::core::tracking::TimedExecution`
+- `crate::cmds::python::pytest_cmd::filter_pytest_output`
+- `crate::cmds::python::mypy_cmd::filter_mypy_output`
+- `crate::cmds::python::ruff_cmd::filter_ruff_check_json`
+- `crate::cmds::python::ruff_cmd::filter_ruff_format`
+- `crate::cmds::rust::cargo_cmd::filter_cargo_test`
 
 ### Step 1 — `src/config.rs`
 
@@ -170,12 +207,14 @@ if let Some(ref filter_name) = alias_filter_name {
 
 Names that must exist in upstream for this block to compile: `utils::resolved_command`, `tee::tee_and_hint`, `tracking::record_parse_failure_silent`, `timer.track`. If any have been renamed, adapt the calls.
 
-### Step 3 — `src/rewrite_cmd.rs`
+### Step 3 — Hook rewrite (v0.36.0: `src/hooks/rewrite_cmd.rs`)
 
-Replace the existing `run` prologue:
+**Important — security:** modern upstream's `rewrite_cmd::run` evaluates a `PermissionVerdict` (Allow/Deny/Ask) before the rewrite. Aliased commands must go through the same verdict match as registry rewrites so they never bypass permission checks.
+
+Replace the existing config load:
 
 ```rust
-let excluded = crate::config::Config::load()
+let excluded = crate::core::config::Config::load()
     .map(|c| c.hooks.exclude_commands)
     .unwrap_or_default();
 ```
@@ -183,27 +222,38 @@ let excluded = crate::config::Config::load()
 with:
 
 ```rust
-let config = crate::config::Config::load().unwrap_or_default();
+let config = crate::core::config::Config::load().unwrap_or_default();
 let excluded = config.hooks.exclude_commands.clone();
+```
 
-// Rewrite aliased commands to `rtk <original>` so run_fallback handles them.
-let trimmed = cmd.trim();
-if !trimmed.starts_with("rtk ") {
-    let aliases = &config.aliases.map;
-    let alias_match = aliases
-        .keys()
-        .filter(|prefix| {
+Then, AFTER the Deny exit (so aliases inherit Deny behavior too) and BEFORE the `match registry::rewrite_command(...)` block, compute an alias rewrite option and feed it into the existing match:
+
+```rust
+let alias_rewritten: Option<String> = {
+    let trimmed = cmd.trim();
+    if !trimmed.starts_with("rtk ") {
+        let any_match = config.aliases.map.keys().any(|prefix| {
             let p = prefix.as_str();
             trimmed == p || trimmed.starts_with(&format!("{} ", p))
-        })
-        .max_by_key(|p| p.len());
-
-    if alias_match.is_some() {
-        print!("rtk {}", trimmed);
-        return Ok(());
+        });
+        if any_match {
+            Some(format!("rtk {}", trimmed))
+        } else {
+            None
+        }
+    } else {
+        None
     }
+};
+
+let resolved = alias_rewritten.or_else(|| registry::rewrite_command(cmd, &excluded));
+
+match resolved {
+    // ... existing Some(rewritten) => match verdict { ... } unchanged ...
 }
 ```
+
+This routes aliased commands through the same Allow/Ask/Default exit-code logic as registry rewrites — they never bypass security.
 
 ### Step 4 — Visibility changes
 
