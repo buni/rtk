@@ -4,6 +4,7 @@ This is a fork of [rtk-ai/rtk](https://github.com/rtk-ai/rtk). It carries additi
 
 ## Layout
 
+- `UPSTREAM_REPO` — upstream repo URL (default `https://github.com/rtk-ai/rtk.git`; set to any fork URL to rebase on a different upstream)
 - `UPSTREAM_REF` — upstream tag this fork targets (e.g. `v0.31.0`)
 - `VERSION` — fork version string (e.g. `0.31.0-alias.1`)
 - `patches/` — fork-specific `.patch` files, applied in lexical order
@@ -36,9 +37,21 @@ git add patches/ && git commit -m "update alias patch"
 ## Bumping upstream
 
 1. Edit `UPSTREAM_REF` (e.g. `v0.31.0` → `v0.32.0`).
-2. `./scripts/apply-patches.sh build`.
-3. If clean → commit `UPSTREAM_REF`.
-4. If conflict → resolve in `build/`, regenerate patch as above, commit both.
+2. Optionally edit `UPSTREAM_REPO` to track a different fork (e.g. `https://github.com/other/rtk.git`).
+3. `./scripts/apply-patches.sh build`.
+4. If clean → commit `UPSTREAM_REF` (and `UPSTREAM_REPO` if changed).
+5. If conflict → resolve in `build/`, regenerate patch as above, commit both.
+
+## Building against a different upstream (ad-hoc)
+
+Without editing files, override via env:
+
+```bash
+UPSTREAM_REMOTE=https://github.com/other/rtk.git \
+  ./scripts/apply-patches.sh build v0.32.0
+```
+
+The release workflow exposes the same knob as a `upstream_repo` input in its `workflow_dispatch` form.
 
 ## Cutting a release
 

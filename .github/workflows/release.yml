@@ -7,6 +7,10 @@ on:
         description: "Upstream tag to build from (default: contents of UPSTREAM_REF)"
         required: false
         default: ""
+      upstream_repo:
+        description: "Upstream repo URL (default: contents of UPSTREAM_REPO)"
+        required: false
+        default: ""
       version:
         description: "Fork version (default: contents of VERSION)"
         required: false
@@ -28,18 +32,22 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       upstream_ref: ${{ steps.resolve.outputs.upstream_ref }}
+      upstream_repo: ${{ steps.resolve.outputs.upstream_repo }}
       version: ${{ steps.resolve.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - id: resolve
         run: |
           UPSTREAM_REF="${{ inputs.upstream_ref }}"
+          UPSTREAM_REPO="${{ inputs.upstream_repo }}"
           VERSION="${{ inputs.version }}"
           [ -z "$UPSTREAM_REF" ] && UPSTREAM_REF="$(cat UPSTREAM_REF)"
+          [ -z "$UPSTREAM_REPO" ] && UPSTREAM_REPO="$(cat UPSTREAM_REPO)"
           [ -z "$VERSION" ] && VERSION="$(cat VERSION)"
           echo "upstream_ref=$UPSTREAM_REF" >> "$GITHUB_OUTPUT"
+          echo "upstream_repo=$UPSTREAM_REPO" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Resolved: upstream=$UPSTREAM_REF version=$VERSION"
+          echo "Resolved: upstream=$UPSTREAM_REPO@$UPSTREAM_REF version=$VERSION"
 
   build:
     name: Build ${{ matrix.target }}
@@ -85,6 +93,8 @@ jobs:
 
       - name: Apply patches
         shell: bash
+        env:
+          UPSTREAM_REMOTE: ${{ needs.resolve-inputs.outputs.upstream_repo }}
         run: scripts/apply-patches.sh build "${{ needs.resolve-inputs.outputs.upstream_ref }}"
 
       - name: Set Cargo.toml version to fork version

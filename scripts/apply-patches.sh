@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # apply-patches.sh BUILD_DIR [UPSTREAM_REF]
 #
-# Clones upstream rtk-ai/rtk at the pinned tag into BUILD_DIR, then applies
+# Clones the configured upstream at the pinned ref into BUILD_DIR, then applies
 # all patches/*.patch onto it using `git am`. Exits non-zero on any failure.
 #
+# Config precedence (first non-empty wins):
+#   UPSTREAM_REF:    $2 arg > $UPSTREAM_REF env > <repo>/UPSTREAM_REF file
+#   UPSTREAM_REMOTE: $UPSTREAM_REMOTE env > <repo>/UPSTREAM_REPO file > hardcoded default
+#
 # Env overrides:
-#   UPSTREAM_REMOTE — default https://github.com/rtk-ai/rtk.git
+#   UPSTREAM_REMOTE — upstream repo URL (e.g. https://github.com/user/rtk.git)
 #   PATCHES_DIR     — default <repo>/patches
 
 set -euo pipefail
@@ -17,8 +21,14 @@ fi
 
 BUILD_DIR="$1"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-UPSTREAM_REF="${2:-$(cat "$REPO_ROOT/UPSTREAM_REF")}"
-UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-https://github.com/rtk-ai/rtk.git}"
+UPSTREAM_REF="${2:-${UPSTREAM_REF:-$(cat "$REPO_ROOT/UPSTREAM_REF")}}"
+if [[ -z "${UPSTREAM_REMOTE:-}" ]]; then
+  if [[ -f "$REPO_ROOT/UPSTREAM_REPO" ]]; then
+    UPSTREAM_REMOTE="$(cat "$REPO_ROOT/UPSTREAM_REPO")"
+  else
+    UPSTREAM_REMOTE="https://github.com/rtk-ai/rtk.git"
+  fi
+fi
 PATCHES_DIR="${PATCHES_DIR:-$REPO_ROOT/patches}"
 
 if [[ -e "$BUILD_DIR" ]]; then
