@@ -1,15 +1,15 @@
-From 89888b7707660432b34657f3f9d54dbe258f885e Mon Sep 17 00:00:00 2001
+From c01e958744725c8f32b1d2f2bdbe44e7b6ed6951 Mon Sep 17 00:00:00 2001
 From: Hristo <xkyrchokov@gmail.com>
 Date: Fri, 20 Mar 2026 12:23:40 +0000
 Subject: [PATCH] feat: add alias support in config
 
 ---
  src/cargo_cmd.rs   |  2 +-
- src/config.rs      | 25 ++++++++++++
- src/main.rs        | 95 +++++++++++++++++++++++++++++++++++++++++++++-
+ src/config.rs      | 25 +++++++++++++
+ src/main.rs        | 93 +++++++++++++++++++++++++++++++++++++++++++++-
  src/pytest_cmd.rs  |  2 +-
- src/rewrite_cmd.rs | 22 +++++++++--
- 5 files changed, 139 insertions(+), 7 deletions(-)
+ src/rewrite_cmd.rs | 25 +++++++++++--
+ 5 files changed, 140 insertions(+), 7 deletions(-)
 
 diff --git a/src/cargo_cmd.rs b/src/cargo_cmd.rs
 index 63eea4b..fbdf656 100644
@@ -68,7 +68,7 @@ index 7ffea86..cdb752e 100644
  pub struct TrackingConfig {
      pub enabled: bool,
 diff --git a/src/main.rs b/src/main.rs
-index 2bbc4bb..d687060 100644
+index 2bbc4bb..5613bfe 100644
 --- a/src/main.rs
 +++ b/src/main.rs
 @@ -1083,8 +1083,8 @@ fn run_fallback(parse_error: clap::Error) -> Result<()> {
@@ -82,7 +82,7 @@ index 2bbc4bb..d687060 100644
      let lookup_cmd = {
          let base = std::path::Path::new(&args[0])
              .file_name()
-@@ -1095,6 +1095,67 @@ fn run_fallback(parse_error: clap::Error) -> Result<()> {
+@@ -1095,6 +1095,63 @@ fn run_fallback(parse_error: clap::Error) -> Result<()> {
              .collect::<Vec<_>>()
              .join(" ")
      };
@@ -109,11 +109,7 @@ index 2bbc4bb..d687060 100644
 +                let stdout_raw = String::from_utf8_lossy(&output.stdout);
 +
 +                let tee_hint = if !output.status.success() {
-+                    tee::tee_and_hint(
-+                        &stdout_raw,
-+                        &raw_command,
-+                        output.status.code().unwrap_or(1),
-+                    )
++                    tee::tee_and_hint(&stdout_raw, &raw_command, output.status.code().unwrap_or(1))
 +                } else {
 +                    None
 +                };
@@ -150,17 +146,19 @@ index 2bbc4bb..d687060 100644
      let toml_match = if std::env::var("RTK_NO_TOML").ok().as_deref() == Some("1") {
          None
      } else {
-@@ -2198,6 +2259,36 @@ fn main() -> Result<()> {
+@@ -2198,6 +2255,38 @@ fn main() -> Result<()> {
      Ok(())
  }
  
 +/// Find the longest alias prefix that matches `cmd`.
 +/// Returns the target filter name (e.g. "pytest") or None.
-+fn find_alias_match(cmd: &str, aliases: &std::collections::HashMap<String, String>) -> Option<String> {
++fn find_alias_match(
++    cmd: &str,
++    aliases: &std::collections::HashMap<String, String>,
++) -> Option<String> {
 +    let mut best: Option<(usize, String)> = None;
 +    for (prefix, target) in aliases {
-+        let matches = cmd == prefix.as_str()
-+            || cmd.starts_with(&format!("{} ", prefix));
++        let matches = cmd == prefix.as_str() || cmd.starts_with(&format!("{} ", prefix));
 +        if matches {
 +            let len = prefix.len();
 +            if best.as_ref().map_or(true, |(bl, _)| len > *bl) {
@@ -201,10 +199,10 @@ index 0b1b1f2..a0592f0 100644
      let mut test_files: Vec<String> = Vec::new();
      let mut failures: Vec<String> = Vec::new();
 diff --git a/src/rewrite_cmd.rs b/src/rewrite_cmd.rs
-index 754f51a..b516054 100644
+index 754f51a..57bde2d 100644
 --- a/src/rewrite_cmd.rs
 +++ b/src/rewrite_cmd.rs
-@@ -11,9 +11,25 @@ use crate::discover::registry;
+@@ -11,9 +11,28 @@ use crate::discover::registry;
  /// [ "$CMD" = "$REWRITTEN" ] && exit 0  # already RTK, skip
  /// ```
  pub fn run(cmd: &str) -> anyhow::Result<()> {
@@ -220,10 +218,13 @@ index 754f51a..b516054 100644
 +    let trimmed = cmd.trim();
 +    if !trimmed.starts_with("rtk ") {
 +        let aliases = &config.aliases.map;
-+        let alias_match = aliases.keys().filter(|prefix| {
-+            let p = prefix.as_str();
-+            trimmed == p || trimmed.starts_with(&format!("{} ", p))
-+        }).max_by_key(|p| p.len());
++        let alias_match = aliases
++            .keys()
++            .filter(|prefix| {
++                let p = prefix.as_str();
++                trimmed == p || trimmed.starts_with(&format!("{} ", p))
++            })
++            .max_by_key(|p| p.len());
 +
 +        if alias_match.is_some() {
 +            print!("rtk {}", trimmed);

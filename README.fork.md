@@ -7,6 +7,7 @@ This is a fork of [rtk-ai/rtk](https://github.com/rtk-ai/rtk). It carries additi
 - `UPSTREAM_REF` — upstream tag this fork targets (e.g. `v0.31.0`)
 - `VERSION` — fork version string (e.g. `0.31.0-alias.1`)
 - `patches/` — fork-specific `.patch` files, applied in lexical order
+- `PATCH.md` — agent-friendly description of the fork feature; used to re-implement if the patch fails to rebase
 - `scripts/apply-patches.sh` — clones upstream, applies patches
 - `.github/workflows/ci.yml` — CI: patch-apply check + tests
 - `.github/workflows/release.yml` — workflow_dispatch: publishes GitHub Release binaries
