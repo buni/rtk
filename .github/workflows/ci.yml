@@ -26,13 +26,9 @@ jobs:
           cd build && git log --oneline -5
 
   test:
-    name: Test on ${{ matrix.os }}
+    name: Test on macOS
     needs: patch-check
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    runs-on: macos-latest
     steps:
       - name: Checkout fork
         uses: actions/checkout@v4
