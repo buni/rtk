@@ -1,4 +1,4 @@
-From c01e958744725c8f32b1d2f2bdbe44e7b6ed6951 Mon Sep 17 00:00:00 2001
+From e8670a84782cdd4bd61b54b64831245066b5224c Mon Sep 17 00:00:00 2001
 From: Hristo <xkyrchokov@gmail.com>
 Date: Fri, 20 Mar 2026 12:23:40 +0000
 Subject: [PATCH] feat: add alias support in config
@@ -68,7 +68,7 @@ index 7ffea86..cdb752e 100644
  pub struct TrackingConfig {
      pub enabled: bool,
 diff --git a/src/main.rs b/src/main.rs
-index 2bbc4bb..5613bfe 100644
+index 2bbc4bb..187d861 100644
 --- a/src/main.rs
 +++ b/src/main.rs
 @@ -1083,8 +1083,8 @@ fn run_fallback(parse_error: clap::Error) -> Result<()> {
@@ -161,7 +161,7 @@ index 2bbc4bb..5613bfe 100644
 +        let matches = cmd == prefix.as_str() || cmd.starts_with(&format!("{} ", prefix));
 +        if matches {
 +            let len = prefix.len();
-+            if best.as_ref().map_or(true, |(bl, _)| len > *bl) {
++            if best.as_ref().is_none_or(|(bl, _)| len > *bl) {
 +                best = Some((len, target.clone()));
 +            }
 +        }

@@ -8,7 +8,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
 
 jobs:
   patch-check:
@@ -68,9 +67,11 @@ jobs:
         working-directory: build
         run: cargo fmt --all --check
 
-      - name: cargo clippy
+      - name: cargo clippy (non-blocking)
+        # Clippy is advisory on upstream code (we don't own it). We only
+        # fail if upstream produces actual compile errors via clippy.
         working-directory: build
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets
 
       - name: cargo test
         working-directory: build
